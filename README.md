@@ -105,6 +105,23 @@ and journal, and it will refuse to change anything:
 Point your client at it and ask "what's using disk space on this machine?" When you're
 ready for real hosts, add a config with `opsgate init`.
 
+### Which clients can reach it
+
+opsgate runs **on your machine** (or on the server itself) and holds your SSH key, so the
+transport you need depends on where your client actually executes:
+
+| Client | Transport | Works because |
+|---|---|---|
+| Claude Code (terminal) | stdio | Runs natively on your machine and launches the binary |
+| Claude Desktop, Cursor, VS Code | stdio | Same — a local process |
+| Cloud or sandboxed surfaces (web chat, VM-backed agents) | **HTTP** | They cannot launch a local process, or even see your SSH key — they can only reach a URL |
+
+If your client reports it has no access to your servers, it is almost certainly one of the
+sandboxed kind. Serve over [HTTP](#any-client-over-http) instead of stdio.
+
+Before publishing that endpoint, read the warning there: it puts an
+infrastructure-management API on whatever network you expose it to.
+
 ### Wire it up to your client
 
 <details>
@@ -130,8 +147,8 @@ claude mcp add opsgate -- opsgate serve --config ~/.opsgate/config.yaml
 ```
 </details>
 
-<details>
-<summary><b>Any client, over HTTP</b></summary>
+<details id="any-client-over-http">
+<summary><b>Any client, over HTTP</b> (needed for cloud/sandboxed clients)</summary>
 
 ```yaml
 http:
@@ -143,7 +160,24 @@ http:
 opsgate serve --http 127.0.0.1:8080
 ```
 
-Terminate TLS upstream if the port leaves localhost.
+The tidiest deployment is to run opsgate **on the server it manages** — then it needs no SSH
+key at all (`default_host: local`) — behind a TLS-terminating reverse proxy:
+
+```
+client ──HTTPS──▶ nginx / Caddy ──▶ 127.0.0.1:8080  opsgate
+                  + Bearer token
+```
+
+> [!WARNING]
+> Exposing this endpoint puts an infrastructure-management API on that network, and the
+> bearer token becomes the only thing protecting it. If you must publish it: keep
+> `mode: observe`, generate 32+ bytes of randomness for the token, require TLS, and add an
+> IP allowlist at the proxy. Binding it to a VPN interface (WireGuard, Tailscale) instead of
+> the public internet is strictly safer — your own devices reach it, nobody else can.
+>
+> Note also that `operate` mode expects a human who can answer an approval prompt. An
+> unattended HTTP deployment usually means `observe`.
+
 </details>
 
 ## The problem this solves
