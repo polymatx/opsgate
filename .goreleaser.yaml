@@ -1,0 +1,48 @@
+version: 2
+
+project_name: opsgate
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: opsgate
+    main: ./cmd/opsgate
+    binary: opsgate
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/polymatx/opsgate/internal/version.Version={{.Version}}
+      - -X github.com/polymatx/opsgate/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/polymatx/opsgate/internal/version.Date={{.CommitDate}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - configs/opsgate.example.yaml
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  footer: |
+    ## Install
+
+    ```bash
+    go install github.com/polymatx/opsgate/cmd/opsgate@{{ .Tag }}
+    ```

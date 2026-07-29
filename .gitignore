@@ -1,0 +1,17 @@
+# Binaries
+/opsgate
+/dist/
+
+# Local config and audit data — never commit these
+opsgate.yaml
+*.audit.jsonl
+audit.jsonl
+
+# Coverage
+coverage.out
+coverage.html
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,103 @@
+# opsgate — full example configuration
+#
+# Every value below is optional; the commented defaults are what opsgate uses
+# when the key is absent. Start from `opsgate init` for a minimal file.
+#
+# Docs: https://github.com/polymatx/opsgate
+
+# ---------------------------------------------------------------------------
+# Mode: how much an agent may do.
+#
+#   observe  read-only. Mutating tools are refused outright. (default)
+#   operate  reads run freely; every write asks the human first.
+#   full     writes run unprompted. Still fully audited.
+# ---------------------------------------------------------------------------
+mode: operate
+
+# Host used when a tool call omits `host`.
+default_host: local
+
+# ---------------------------------------------------------------------------
+# Hosts. "local" is implicit and always available — do not redefine it.
+# Host keys must already be in ~/.ssh/known_hosts; opsgate refuses unknown keys.
+# ---------------------------------------------------------------------------
+hosts:
+  web1:
+    addr: 203.0.113.10
+    user: opsgate           # prefer a least-privilege user over root
+    key: ~/.ssh/id_ed25519  # omit to use ssh-agent
+    port: 22
+
+  prod-db:
+    addr: 203.0.113.20
+    user: opsgate
+    key: ~/.ssh/id_ed25519
+    mode: observe           # per-host override: this box is read-only
+
+# ---------------------------------------------------------------------------
+# File tools (file_read, dir_list, file_grep) may only touch these paths.
+# Paths are normalised before the check, so ../ traversal cannot escape.
+# ---------------------------------------------------------------------------
+files:
+  allow_paths:
+    - /var/log
+    - /etc/nginx
+    - /etc/systemd
+    # - /srv/*/logs          # glob entries are supported
+  max_bytes: 65536
+
+# ---------------------------------------------------------------------------
+# Audit log: hash-chained JSONL. Verify with `opsgate audit verify`.
+# ---------------------------------------------------------------------------
+audit:
+  path: ~/.opsgate/audit.jsonl
+  # Argument keys whose values are masked before being written.
+  redact_keys:
+    - password
+    - passwd
+    - token
+    - secret
+    - api_key
+    - key
+
+# ---------------------------------------------------------------------------
+# Per-tool rules. Anything not listed follows the mode default.
+#
+#   enabled:       false removes the tool from the listing entirely
+#   allow_targets: glob allowlist for the tool's primary argument
+#   approval:      "always" (force a prompt even in full mode)
+#                  "never"  (skip the prompt in operate mode)
+# ---------------------------------------------------------------------------
+tools:
+  # Freeform shell is opt-in and approval-gated. Leave it off unless needed.
+  shell_exec:
+    enabled: false
+
+  # Restarting nginx or your own app is fine; the database is not.
+  service_restart:
+    allow_targets: ["nginx", "myapp*", "redis"]
+
+  # Stopping services outright is rarely what you want an agent doing.
+  service_stop:
+    enabled: false
+
+  docker_restart:
+    allow_targets: ["api-*", "worker-*"]
+
+  # Reading logs is routine — do not prompt for it.
+  journal_tail:
+    approval: never
+
+# ---------------------------------------------------------------------------
+# Limits
+# ---------------------------------------------------------------------------
+timeout_seconds: 30
+max_output_bytes: 49152
+
+# ---------------------------------------------------------------------------
+# Remote transport. Omit this block entirely to use stdio (the default).
+# Terminate TLS upstream if the port is reachable off-box.
+# ---------------------------------------------------------------------------
+# http:
+#   addr: "127.0.0.1:8080"
+#   auth_token: "generate-a-long-random-token"
