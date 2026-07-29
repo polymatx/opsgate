@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strings"
 
 	"github.com/polymatx/opsgate/internal/config"
 )
@@ -82,9 +83,19 @@ func (e *Engine) Check(host, tool string, class Class, target string) (Decision,
 		return Deny, fmt.Sprintf("tool %s is disabled by policy", tool)
 	}
 
-	// Target allowlist applies to every class.
-	if target != "" && len(rule.AllowTargets) > 0 && !matchAny(rule.AllowTargets, target) {
-		return Deny, fmt.Sprintf("target %q is not in allow_targets for %s", target, tool)
+	// Target allowlist applies to every class. An empty target must not skip it:
+	// for a tool whose target is optional, omitting it is usually BROADER than
+	// any allowed value (journal_tail with no unit reads the whole journal), so
+	// an unconstrained call has to be refused once an allowlist exists.
+	if len(rule.AllowTargets) > 0 {
+		if target == "" {
+			return Deny, fmt.Sprintf(
+				"%s requires an explicit target because allow_targets is configured (allowed: %s)",
+				tool, strings.Join(rule.AllowTargets, ", "))
+		}
+		if !matchAny(rule.AllowTargets, target) {
+			return Deny, fmt.Sprintf("target %q is not in allow_targets for %s", target, tool)
+		}
 	}
 
 	switch class {

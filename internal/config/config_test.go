@@ -105,3 +105,29 @@ func TestLoadMissingFileFallsBackToDefault(t *testing.T) {
 		t.Error("expected an error for an explicitly named missing config")
 	}
 }
+
+func TestLoadRejectsUnknownToolName(t *testing.T) {
+	// A typo under tools: would otherwise silently do nothing.
+	if _, err := Load(write(t, "tools:\n  service_restrt:\n    approval: always\n")); err == nil {
+		t.Error("expected an error for a misspelled tool name")
+	}
+}
+
+func TestLoadRejectsInvalidApprovalValue(t *testing.T) {
+	// "Always" is not "always"; accepting it would fail OPEN in full mode.
+	for _, bad := range []string{"Always", "alwyas", "require", "yes"} {
+		body := "tools:\n  service_stop:\n    approval: " + bad + "\n"
+		if _, err := Load(write(t, body)); err == nil {
+			t.Errorf("expected an error for approval: %q", bad)
+		}
+	}
+}
+
+func TestLoadAcceptsValidApprovalValues(t *testing.T) {
+	for _, ok := range []string{"always", "never"} {
+		body := "tools:\n  service_stop:\n    approval: " + ok + "\n"
+		if _, err := Load(write(t, body)); err != nil {
+			t.Errorf("approval: %q was rejected: %v", ok, err)
+		}
+	}
+}

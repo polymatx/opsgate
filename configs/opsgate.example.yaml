@@ -64,9 +64,13 @@ audit:
 # Per-tool rules. Anything not listed follows the mode default.
 #
 #   enabled:       false removes the tool from the listing entirely
-#   allow_targets: glob allowlist for the tool's primary argument
+#   allow_targets: glob allowlist for the tool's primary argument. Note that
+#                  once set, the tool REQUIRES an explicit target: omitting it
+#                  is usually broader than any allowed value, so it is refused.
 #   approval:      "always" (force a prompt even in full mode)
 #                  "never"  (skip the prompt in operate mode)
+#                  Applies to mutating tools only — read-only tools never
+#                  prompt, so setting it on them has no effect.
 # ---------------------------------------------------------------------------
 tools:
   # Freeform shell is opt-in and approval-gated. Leave it off unless needed.
@@ -84,8 +88,9 @@ tools:
   docker_restart:
     allow_targets: ["api-*", "worker-*"]
 
-  # Reading logs is routine — do not prompt for it.
-  journal_tail:
+  # Reloading nginx is low-risk and pre-validated by nginx -t, so allow it
+  # without a prompt even in operate mode.
+  nginx_reload:
     approval: never
 
 # ---------------------------------------------------------------------------

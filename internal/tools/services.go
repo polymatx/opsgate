@@ -49,12 +49,13 @@ func registerServices(s *mcp.Server, g *Gate) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in nameArgs) (*mcp.CallToolResult, any, error) {
 		host := g.resolveHost(in.Host)
 		res, err := g.run(ctx, req, call{
-			tool:   "service_status",
-			class:  policy.Observe,
-			host:   host,
-			target: in.Name,
-			argv:   []string{"systemctl", "status", in.Name, "--no-pager", "--lines=20"},
-			args:   map[string]any{"host": host, "name": in.Name},
+			tool:          "service_status",
+			class:         policy.Observe,
+			host:          host,
+			target:        in.Name,
+			requireTarget: true,
+			argv:          []string{"systemctl", "status", in.Name, "--no-pager", "--lines=20"},
+			args:          map[string]any{"host": host, "name": in.Name},
 		})
 		return res, nil, err
 	})
@@ -76,13 +77,14 @@ func registerServices(s *mcp.Server, g *Gate) {
 		}, func(ctx context.Context, req *mcp.CallToolRequest, in nameArgs) (*mcp.CallToolResult, any, error) {
 			host := g.resolveHost(in.Host)
 			res, err := g.run(ctx, req, call{
-				tool:    action.tool,
-				class:   policy.Mutate,
-				host:    host,
-				target:  in.Name,
-				argv:    []string{"systemctl", action.verb, in.Name},
-				args:    map[string]any{"host": host, "name": in.Name},
-				summary: fmt.Sprintf("This will %s the service %q.", action.verb, in.Name),
+				tool:          action.tool,
+				class:         policy.Mutate,
+				host:          host,
+				target:        in.Name,
+				requireTarget: true,
+				argv:          []string{"systemctl", action.verb, in.Name},
+				args:          map[string]any{"host": host, "name": in.Name},
+				summary:       fmt.Sprintf("This will %s the service %q.", action.verb, in.Name),
 			})
 			return res, nil, err
 		})

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,12 +17,24 @@ import (
 	"time"
 )
 
+// Phase distinguishes the two records a state-changing call produces.
+const (
+	// PhaseIntent is written before a mutating command runs, so an executed
+	// action can never be missing from the log.
+	PhaseIntent = "intent"
+	// PhaseOutcome carries the result of the command.
+	PhaseOutcome = "outcome"
+)
+
 // Record is one audited tool call.
 type Record struct {
-	Seq        int64          `json:"seq"`
-	Time       time.Time      `json:"time"`
-	Host       string         `json:"host"`
-	Tool       string         `json:"tool"`
+	Seq  int64     `json:"seq"`
+	Time time.Time `json:"time"`
+	Host string    `json:"host"`
+	Tool string    `json:"tool"`
+	// Phase is PhaseIntent or PhaseOutcome for mutating calls, empty for
+	// read-only calls and refusals, which produce a single record.
+	Phase      string         `json:"phase,omitempty"`
 	Args       map[string]any `json:"args,omitempty"`
 	Decision   string         `json:"decision"`
 	Approved   *bool          `json:"approved,omitempty"`
@@ -79,15 +92,25 @@ func tail(path string) (seq int64, prevHash string, err error) {
 	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	var last Record
 	found := false
+	lineNo := 0
 	for sc.Scan() {
+		lineNo++
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
 		}
-		var r Record
-		if json.Unmarshal([]byte(line), &r) == nil {
-			last, found = r, true
+		// Refuse to resume from a damaged log. Skipping a bad line would append a
+		// chain that starts from the wrong predecessor, which is far worse than
+		// telling the operator their audit file needs attention.
+		r, err := decodeStrict(line)
+		if err != nil {
+			return 0, "", fmt.Errorf("audit log %s line %d is corrupt (%w); "+
+				"move it aside or repair it before starting opsgate", path, lineNo, err)
 		}
+		last, found = r, true
+	}
+	if err := sc.Err(); err != nil {
+		return 0, "", fmt.Errorf("audit read: %w", err)
 	}
 	if !found {
 		return 0, genesis, nil
@@ -155,6 +178,22 @@ func SumOutput(out []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// decodeStrict parses one log line, rejecting any field that is not part of
+// Record and therefore not covered by the hash chain.
+func decodeStrict(line string) (Record, error) {
+	var r Record
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&r); err != nil {
+		return r, fmt.Errorf("record is not a valid audit entry: %w", err)
+	}
+	// Exactly one JSON value per line; trailing content would not be hashed.
+	if dec.More() {
+		return r, errors.New("record has trailing content after the JSON object")
+	}
+	return r, nil
+}
+
 // Verify walks a JSONL audit file and checks the hash chain. It returns the
 // number of valid records, or an error naming the first broken line.
 func Verify(path string) (int, error) {
@@ -174,9 +213,13 @@ func Verify(path string) (int, error) {
 		if line == "" {
 			continue
 		}
-		var r Record
-		if err := json.Unmarshal([]byte(line), &r); err != nil {
-			return n, fmt.Errorf("line %d: not valid JSON: %w", lineNo, err)
+		// Strict decoding matters: the chain authenticates the Record fields, so
+		// an attacker could otherwise splice extra JSON keys ("approved_by":
+		// "alice") into an existing line and still have it verify. Anything the
+		// hash does not cover must be rejected outright.
+		r, err := decodeStrict(line)
+		if err != nil {
+			return n, fmt.Errorf("line %d: %w", lineNo, err)
 		}
 		if r.PrevHash != prev {
 			return n, fmt.Errorf("line %d: chain broken (prev_hash %q, want %q)", lineNo, r.PrevHash, prev)

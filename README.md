@@ -48,7 +48,7 @@ On top of that, four layers:
 |---|---|
 | **Structured tools** | Commands are built as `argv`, never string-concatenated. Injection is impossible by construction, not by filtering. |
 | **Deny-by-default policy** | Three modes — `observe` (read-only), `operate` (writes need approval), `full`. Per-host overrides, per-tool target allowlists. |
-| **Human approval gates** | Mutating calls pause and ask you, showing the exact command, via MCP elicitation. |
+| **Human approval gates** | Mutating calls pause and ask you, showing the exact command. Requires a client that supports MCP elicitation; if it cannot ask, the call is refused rather than run. |
 | **Tamper-evident audit** | Every call — including every refusal — appended to a hash-chained JSONL log. Editing or deleting any line is detectable. |
 
 The default mode is `observe`. Out of the box, an agent can diagnose your servers
@@ -126,6 +126,10 @@ tools:
     enabled: true                        # opt in to freeform shell (still approval-gated)
 ```
 
+Setting `allow_targets` also makes the target **mandatory** for that tool: omitting it is
+usually broader than any allowed value — `journal_tail` with no unit reads the whole
+journal — so an unconstrained call is refused rather than silently permitted.
+
 ## Tools
 
 **Observe** — always available
@@ -154,11 +158,16 @@ Every call appends one JSON line embedding the hash of the previous record:
 ```jsonl
 {"seq":41,"time":"2026-07-29T11:02:14Z","host":"web1","tool":"service_status","decision":"allow","exit_code":0,...,"prev_hash":"9f2c…","hash":"41ab…"}
 {"seq":42,"time":"2026-07-29T11:02:31Z","host":"web1","tool":"file_read","args":{"path":"/root/.ssh/id_rsa"},"decision":"deny","error":"outside the allowed paths",...}
-{"seq":43,"time":"2026-07-29T11:03:02Z","host":"web1","tool":"service_restart","decision":"needs_approval","approved":true,"exit_code":0,...}
+{"seq":43,"time":"2026-07-29T11:03:02Z","host":"web1","tool":"service_restart","phase":"intent","decision":"needs_approval","approved":true,...}
+{"seq":44,"time":"2026-07-29T11:03:02Z","host":"web1","tool":"service_restart","phase":"outcome","decision":"needs_approval","approved":true,"exit_code":0,...}
 ```
 
 Refusals are recorded too — a blocked attempt to read a private key is exactly what you
 want to find later.
+
+A state-changing call writes two records: `phase: intent` **before** the command runs and
+`phase: outcome` after. If the intent record cannot be written, opsgate refuses to act —
+so an action that happened can never be missing from the log.
 
 ```bash
 $ opsgate audit verify

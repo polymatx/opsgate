@@ -68,15 +68,25 @@ Modes are per-host, so production can be `observe` while staging is `operate`.
 
 ### C3 — Human approval (bounds A2 and A3)
 
-In `operate`, mutating calls block on MCP elicitation showing the tool, host, a
+In `operate`, mutating calls stop and ask the operator, showing the tool, host, a
 plain-language summary, and the exact command. Approval is per-call; there is no
 "remember this" path.
 
 This is the control that specifically addresses prompt injection: a compromised agent can
 *request* a restart, but a human sees the request before it happens.
 
-If the client does not support elicitation, the call fails closed with an explanatory
-error — it does not silently proceed.
+Two protocol shapes are supported, because MCP changed how this works:
+
+- From protocol version **2026-07-28** a server may not send `elicitation/create` while
+  serving a request (SEP-2322). opsgate instead returns an input-required result carrying
+  the confirmation; the client collects the answer and retries the same call. Only an
+  explicit `accept` proceeds — `decline` and `cancel` both refuse.
+- Older sessions are asked with a server-initiated elicitation and answered inline.
+
+If the client cannot ask the operator at all, the call fails closed with an explanatory
+error — it never silently proceeds. `internal/tools/approval_test.go` drives a real MCP
+client over an in-memory transport to prove accept executes, decline and cancel do not,
+and a client with no elicitation support cannot cause execution.
 
 ### C4 — Path allowlist (protects secrets)
 
@@ -90,8 +100,15 @@ rejected:
 Defaults are `/var/log`, `/etc/nginx`, `/etc/systemd` — deliberately not `/`, and
 deliberately not `$HOME`.
 
+A glob entry such as `/srv/*/logs` acts as a directory prefix: files beneath a matching
+directory are readable, and `/srv/app1/secrets` is not.
+
+An empty target does not skip the checks. Where a tool's primary argument is mandatory, an
+empty string is refused; and once `allow_targets` is configured, the tool requires an
+explicit target, because omitting it is usually broader than any allowed value.
+
 **Known limitation:** the check is lexical. A symlink *inside* an allowed directory that
-points outside it will be followed by the remote `cat`. If your allowed paths are
+points outside it will be followed on the remote side. If your allowed paths are
 writable by untrusted users, treat that as a hole.
 
 ### C5 — Hash-chained audit log (defeats A5)
@@ -99,6 +116,18 @@ writable by untrusted users, treat that as a hole.
 Each record embeds `prev_hash`, the SHA-256 of the preceding record. `opsgate audit verify`
 walks the file and reports the first line where the chain breaks. Editing a record,
 deleting one, or reordering two all invalidate everything downstream.
+
+Verification decodes strictly: the chain authenticates the record's known fields, so a line
+carrying any *extra* JSON key is rejected outright. Without that, an attacker could splice
+`"approved_by": "alice"` into an existing line and still have it verify.
+
+State-changing calls write two records — `phase: intent` before the command runs and
+`phase: outcome` after. If the intent record cannot be written, the command is refused, so
+an action that happened is never missing from the log. A failed write is also reported on
+stderr rather than being swallowed.
+
+`Open` refuses to resume from a damaged log: appending after an unparseable line would
+build a chain from the wrong predecessor, which is worse than telling the operator.
 
 Denials are logged with the same weight as successes.
 
@@ -121,9 +150,19 @@ silently serve unauthenticated. TLS is not built in; terminate it upstream.
 ### C7 — Resource bounds
 
 Per-command timeout (default 30s) with SSH sessions signalled and closed on expiry so a
-hung remote command cannot pin a connection. Output is capped
-(`max_output_bytes`, default 48 KiB) with explicit truncation notice; `lines`-style
-arguments are clamped server-side regardless of what the agent requests.
+hung remote command cannot pin a connection. Session creation happens under the same
+timeout, so a half-open connection cannot block past it. On the timeout path opsgate waits
+for the SSH output copiers to finish before reading the output buffers, and abandons the
+output rather than racing them if they do not stop.
+
+Output is capped two ways: `files.max_bytes` (default 64 KiB) bounds file reads *on the
+remote host*, so a multi-gigabyte log is never streamed in full, and `max_output_bytes`
+(default 48 KiB) caps what is returned to the model, with an explicit truncation notice.
+`lines`-style arguments are clamped server-side regardless of what the agent requests.
+
+A dropped SSH connection is evicted from the cache so the next call reconnects, and dials
+are serialised per host rather than globally, so one unreachable host does not stall calls
+to the others.
 
 ## Non-goals
 

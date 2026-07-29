@@ -184,8 +184,17 @@ func TestGateAllowsMutationInFullMode(t *testing.T) {
 	if len(fake.calls) != 1 {
 		t.Errorf("executor called %d times, want 1", len(fake.calls))
 	}
-	if recs := readAudit(t, logPath); len(recs) != 1 || recs[0].Decision != "allow" {
-		t.Errorf("audit = %+v, want one allow record", recs)
+	// A mutating call writes intent before executing and the outcome after, so
+	// an action can never be absent from the log.
+	recs := readAudit(t, logPath)
+	if len(recs) != 2 {
+		t.Fatalf("got %d records, want 2 (intent + outcome): %+v", len(recs), recs)
+	}
+	if recs[0].Phase != audit.PhaseIntent || recs[0].Decision != "allow" {
+		t.Errorf("record 1 = phase %q decision %q, want intent/allow", recs[0].Phase, recs[0].Decision)
+	}
+	if recs[1].Phase != audit.PhaseOutcome || recs[1].ExitCode != 0 {
+		t.Errorf("record 2 = phase %q exit %d, want outcome/0", recs[1].Phase, recs[1].ExitCode)
 	}
 }
 

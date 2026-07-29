@@ -133,16 +133,25 @@ func serveHTTP(ctx context.Context, cfg *config.Config, newServer func() *mcp.Se
 		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// ListenAndServe returns ErrServerClosed the moment Shutdown is called, so
+	// the process must wait for Shutdown itself to finish. Returning early would
+	// let the caller close executors and the audit log while in-flight tool calls
+	// are still running — an action could execute with no record of it.
+	shutdownDone := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		fmt.Fprintln(os.Stderr, "opsgate: shutting down, waiting for in-flight calls…")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		shutdownDone <- srv.Shutdown(shutdownCtx)
 	}()
 
 	fmt.Fprintf(os.Stderr, "opsgate: listening on %s (streamable HTTP)\n", cfg.HTTP.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	if err := <-shutdownDone; err != nil {
+		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
 }

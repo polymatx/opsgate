@@ -133,38 +133,72 @@ func DialSSH(name, addr, user, keyPath string, port int, timeout time.Duration) 
 	return &SSH{name: name, client: client}, nil
 }
 
+// closeGrace is how long Run waits, after closing a timed-out session, for
+// x/crypto/ssh's output-copying goroutines to finish before it is safe to read
+// the output buffers.
+const closeGrace = 2 * time.Second
+
 func (s *SSH) Run(ctx context.Context, argv []string) (Result, error) {
 	if len(argv) == 0 {
 		return Result{}, errors.New("empty command")
 	}
 	start := time.Now()
-	sess, err := s.client.NewSession()
-	if err != nil {
-		return Result{}, fmt.Errorf("ssh session: %w", err)
-	}
-	defer sess.Close()
-
-	var stdout, stderr bytes.Buffer
-	sess.Stdout, sess.Stderr = &stdout, &stderr
 
 	// Every argv element is single-quoted, so the remote shell treats it as one
 	// literal word regardless of the characters it contains.
 	cmdLine := QuoteArgv(argv)
 
+	var stdout, stderr bytes.Buffer
 	done := make(chan error, 1)
-	go func() { done <- sess.Run(cmdLine) }()
+	// sessCh publishes the session so the timeout path can close it. Session
+	// creation happens on this goroutine too: on a half-open connection
+	// NewSession can block indefinitely, and it must not outlast ctx.
+	sessCh := make(chan *ssh.Session, 1)
+
+	go func() {
+		sess, err := s.client.NewSession()
+		if err != nil {
+			done <- fmt.Errorf("ssh session: %w", err)
+			return
+		}
+		defer sess.Close()
+		// Buffers must be attached before the session is published, so the
+		// timeout path never races with this assignment.
+		sess.Stdout, sess.Stderr = &stdout, &stderr
+		sessCh <- sess
+		done <- sess.Run(cmdLine)
+	}()
 
 	select {
 	case <-ctx.Done():
 		// Signal then close so a hung remote command cannot pin the session.
-		_ = sess.Signal(ssh.SIGKILL)
-		_ = sess.Close()
-		return Result{
-			Stdout:   stdout.String(),
-			Stderr:   stderr.String(),
-			ExitCode: -1,
-			Duration: time.Since(start),
-		}, ctx.Err()
+		select {
+		case sess := <-sessCh:
+			_ = sess.Signal(ssh.SIGKILL)
+			_ = sess.Close()
+		default:
+			// Still connecting; nothing to signal.
+		}
+		// Do not touch stdout/stderr until the goroutine — and with it
+		// x/crypto/ssh's io.Copy into these buffers — has finished. bytes.Buffer
+		// is not safe for concurrent use, so reading here while a copier is
+		// still writing would be a data race. Closing the session unblocks Run.
+		select {
+		case <-done:
+			return Result{
+				Stdout:   stdout.String(),
+				Stderr:   stderr.String(),
+				ExitCode: -1,
+				Duration: time.Since(start),
+			}, ctx.Err()
+		case <-time.After(closeGrace):
+			// The copiers may still be running: abandon the output rather than
+			// read a buffer that is concurrently written.
+			return Result{
+				ExitCode: -1,
+				Duration: time.Since(start),
+			}, ctx.Err()
+		}
 	case err := <-done:
 		res := Result{
 			Stdout:   stdout.String(),

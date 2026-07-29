@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/polymatx/opsgate/internal/executor"
 	"github.com/polymatx/opsgate/internal/policy"
 )
 
@@ -26,17 +27,25 @@ func registerFiles(s *mcp.Server, g *Gate) {
 			return g.refuse(host, "file_read", map[string]any{"host": host, "path": in.Path},
 				g.pathRefusal(in.Path)), nil, nil
 		}
-		argv := []string{"cat", clean}
+		// files.max_bytes is enforced on the remote side so a huge file is never
+		// read into memory in full. Both numbers are server-controlled.
+		maxBytes := g.cfg.Files.MaxBytes
+		argv := []string{"head", "-c", fmt.Sprint(maxBytes), clean}
 		if in.Lines > 0 {
-			argv = []string{"tail", "-n", fmt.Sprint(clamp(in.Lines, 100, 5000)), clean}
+			lines := clamp(in.Lines, 100, 5000)
+			// Fixed script shape; only the clamped integers and our own
+			// single-quoted path are interpolated.
+			argv = []string{"sh", "-c", fmt.Sprintf("tail -n %d -- %s | head -c %d",
+				lines, executor.ShellQuote(clean), maxBytes)}
 		}
 		res, err := g.run(ctx, req, call{
-			tool:   "file_read",
-			class:  policy.Observe,
-			host:   host,
-			target: clean,
-			argv:   argv,
-			args:   map[string]any{"host": host, "path": clean, "lines": in.Lines},
+			tool:         "file_read",
+			class:        policy.Observe,
+			host:         host,
+			target:       clean,
+			targetIsPath: true,
+			argv:         argv,
+			args:         map[string]any{"host": host, "path": clean, "lines": in.Lines, "max_bytes": maxBytes},
 		})
 		return res, nil, err
 	})
@@ -55,12 +64,13 @@ func registerFiles(s *mcp.Server, g *Gate) {
 				g.pathRefusal(in.Path)), nil, nil
 		}
 		res, err := g.run(ctx, req, call{
-			tool:   "dir_list",
-			class:  policy.Observe,
-			host:   host,
-			target: clean,
-			argv:   []string{"ls", "-lah", "--", clean},
-			args:   map[string]any{"host": host, "path": clean},
+			tool:         "dir_list",
+			class:        policy.Observe,
+			host:         host,
+			target:       clean,
+			targetIsPath: true,
+			argv:         []string{"ls", "-lah", "--", clean},
+			args:         map[string]any{"host": host, "path": clean},
 		})
 		return res, nil, err
 	})
@@ -88,12 +98,13 @@ func registerFiles(s *mcp.Server, g *Gate) {
 		// -F: fixed string, so the pattern is never interpreted as a regex.
 		// -m: bound the match count. The pattern travels as its own argv element.
 		res, err := g.run(ctx, req, call{
-			tool:   "file_grep",
-			class:  policy.Observe,
-			host:   host,
-			target: clean,
-			argv:   []string{"grep", "-F", "-n", "-m", fmt.Sprint(max), "--", in.Pattern, clean},
-			args:   map[string]any{"host": host, "path": clean, "pattern": in.Pattern, "lines": max},
+			tool:         "file_grep",
+			class:        policy.Observe,
+			host:         host,
+			target:       clean,
+			targetIsPath: true,
+			argv:         []string{"grep", "-F", "-n", "-m", fmt.Sprint(max), "-e", in.Pattern, "--", clean},
+			args:         map[string]any{"host": host, "path": clean, "pattern": in.Pattern, "lines": max},
 		})
 		return res, nil, err
 	})
@@ -132,7 +143,8 @@ func registerNginx(s *mcp.Server, g *Gate) {
 			return nil, nil, err
 		}
 		if check.IsError {
-			return errResult("Refused to reload: nginx -t failed.\n\n" + textOf(check)), nil, nil
+			return g.refuse(host, "nginx_reload", map[string]any{"host": host},
+				"Refused to reload: nginx -t failed.\n\n"+textOf(check)), nil, nil
 		}
 		res, err := g.run(ctx, req, call{
 			tool:    "nginx_reload",
@@ -166,9 +178,15 @@ func (g *Gate) allowedPath(p string) (string, bool) {
 		if strings.HasPrefix(clean, a+"/") {
 			return clean, true
 		}
-		// Support explicit glob entries such as /srv/*/logs.
-		if ok, err := filepath.Match(a, clean); err == nil && ok {
-			return clean, true
+		// Glob entries such as /srv/*/logs act as directory prefixes: the entry
+		// must be allowed to cover files beneath it, not only the directory
+		// itself. Walk clean's ancestors and accept if any of them matches.
+		if strings.ContainsAny(a, "*?[") {
+			for dir := clean; dir != "/" && dir != "."; dir = path.Dir(dir) {
+				if ok, err := filepath.Match(a, dir); err == nil && ok {
+					return clean, true
+				}
+			}
 		}
 	}
 	return "", false

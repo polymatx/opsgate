@@ -157,3 +157,43 @@ func TestVerifyMissingFile(t *testing.T) {
 		t.Error("expected an error for a missing audit file")
 	}
 }
+
+func TestVerifyRejectsInjectedFields(t *testing.T) {
+	// The chain authenticates Record fields, so an attacker must not be able to
+	// splice extra JSON keys into a line and still have it verify.
+	l, path := newLogger(t)
+	for _, tool := range []string{"disk_usage", "service_restart", "docker_ps"} {
+		if err := l.Log(Record{Time: time.Now(), Host: "local", Tool: tool, Decision: "allow"}); err != nil {
+			t.Fatalf("Log: %v", err)
+		}
+	}
+	_ = l.Close()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	// Insert a forged justification into the middle record, keeping its hashes.
+	lines[1] = strings.Replace(lines[1], `{"seq"`, `{"approved_by":"alice","note":"authorised by CTO","seq"`, 1)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := Verify(path); err == nil {
+		t.Errorf("Verify() accepted a record with injected fields (n=%d)", n)
+	}
+}
+
+func TestOpenRefusesCorruptLog(t *testing.T) {
+	// Resuming from a damaged log would append a chain starting from the wrong
+	// predecessor; opsgate must refuse to start instead.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.jsonl")
+	if err := os.WriteFile(path, []byte("{not json}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, nil); err == nil {
+		t.Error("Open() accepted a corrupt audit log")
+	}
+}

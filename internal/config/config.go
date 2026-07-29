@@ -4,11 +4,29 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// KnownTools is every tool name that may appear under `tools:` in the config.
+// It is validated against the actually-registered set by a test in the tools
+// package, so the two cannot drift apart.
+var KnownTools = map[string]bool{
+	// observe
+	"system_info": true, "disk_usage": true, "process_top": true, "listening_ports": true,
+	"service_list": true, "service_status": true,
+	"docker_ps": true, "docker_logs": true, "docker_inspect": true, "docker_stats": true,
+	"compose_ps": true, "journal_tail": true, "journal_errors": true,
+	"file_read": true, "dir_list": true, "file_grep": true, "nginx_test": true,
+	// mutate
+	"service_restart": true, "service_start": true, "service_stop": true, "service_reload": true,
+	"docker_restart": true, "docker_start": true, "docker_stop": true, "nginx_reload": true,
+	// opt-in
+	"shell_exec": true,
+}
 
 // Mode controls how much an agent is allowed to do.
 type Mode string
@@ -177,6 +195,26 @@ func (c *Config) validate() error {
 	if c.DefaultHost != "local" {
 		if _, ok := c.Hosts[c.DefaultHost]; !ok {
 			return fmt.Errorf("default_host %q is not defined under hosts", c.DefaultHost)
+		}
+	}
+	// Validate the tools map. A typo here would otherwise pass silently, and a
+	// misspelled approval value fails OPEN — "Always" is not "always", so the
+	// operator's intent to force a prompt would be ignored in full mode.
+	for name, rule := range c.Tools {
+		if !KnownTools[name] {
+			return fmt.Errorf("tools: unknown tool %q (run 'opsgate serve' with a valid tool name; "+
+				"see the Tools section of the README for the full list)", name)
+		}
+		switch rule.Approval {
+		case "", "always", "never":
+		default:
+			return fmt.Errorf("tools.%s.approval: invalid value %q (want \"always\", \"never\", or omitted)",
+				name, rule.Approval)
+		}
+		for _, pat := range rule.AllowTargets {
+			if _, err := path.Match(pat, ""); err != nil {
+				return fmt.Errorf("tools.%s.allow_targets: %q is not a valid pattern: %w", name, pat, err)
+			}
 		}
 	}
 	return nil
