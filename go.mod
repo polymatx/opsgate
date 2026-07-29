@@ -1,6 +1,6 @@
 module github.com/polymatx/opsgate
 
-go 1.26.3
+go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
