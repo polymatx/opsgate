@@ -11,7 +11,7 @@ without handing it a root shell.
 [![Go Report Card](https://goreportcard.com/badge/github.com/polymatx/opsgate)](https://goreportcard.com/report/github.com/polymatx/opsgate)
 [![Go Reference](https://pkg.go.dev/badge/github.com/polymatx/opsgate.svg)](https://pkg.go.dev/github.com/polymatx/opsgate)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](https://modelcontextprotocol.io)
 
 [What it looks like](#what-it-looks-like) ·
