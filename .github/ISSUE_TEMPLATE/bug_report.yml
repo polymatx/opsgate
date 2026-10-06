@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in opsgate doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If an agent managed to do something your policy should have refused (argument injection, a policy or approval bypass, a path escape, a missing audit record, a leaked secret), please don't open an issue. Report it privately as described in the [security policy](https://github.com/polymatx/opsgate/security/policy).
+
+        Remove secrets, tokens and private hostnames from anything you paste below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: tool-calls
+    attributes:
+      label: Tool calls and steps to reproduce
+      description: Which tools the agent called, with which arguments, from which client.
+    validations:
+      required: true
+  - type: input
+    id: opsgate-version
+    attributes:
+      label: opsgate version
+      description: Output of `opsgate version`.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Policy mode
+      options:
+        - observe
+        - operate
+        - full
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - stdio
+        - HTTP
+    validations:
+      required: true
+  - type: dropdown
+    id: executor
+    attributes:
+      label: Target host
+      options:
+        - local
+        - SSH
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Client and operating systems
+      description: The MCP client, the OS opsgate runs on, and the target host's OS.
+      placeholder: Claude Code on macOS 26, target Ubuntu 24.04 over SSH
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: The part of your opsgate config that matters here, with secrets removed.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Audit log records or error output
+      description: The matching audit log lines, or the error the client showed.
+      render: shell

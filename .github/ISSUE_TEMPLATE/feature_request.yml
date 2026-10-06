@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a new tool or capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        opsgate's tools are typed and build their own command lines from validated arguments, so a new capability usually means a new typed tool with its own policy rather than a wider `shell_exec`.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want an agent to be able to do?
+      description: The operation, on what kind of host, and why the current tools don't cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed tool or behavior
+      description: Name, arguments, and whether it only reads or also changes state (that decides which modes it runs in).
+      render: yaml
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you do this today?
