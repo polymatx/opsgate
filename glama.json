@@ -1,0 +1,32 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": [
+    "polymatx"
+  ],
+  "name": "opsgate",
+  "display_name": "opsgate",
+  "description": "The safety gate between AI agents and your servers. 25 typed tools for services, logs, Docker, disks, ports, files and nginx, built as argv so the agent never supplies a command string; deny-by-default policy with observe / operate / full modes per host, human approval for every change via MCP elicitation, and a hash-chained audit log that also records refusals. Local or over SSH with known_hosts verification. Single static Go binary.",
+  "repository": "https://github.com/polymatx/opsgate",
+  "license": "MIT",
+  "runtime": "go",
+  "tags": [
+    "devops",
+    "sre",
+    "sysadmin",
+    "server-management",
+    "ssh",
+    "docker",
+    "systemd",
+    "security",
+    "audit-log",
+    "infrastructure"
+  ],
+  "mcpServers": {
+    "opsgate": {
+      "command": "opsgate",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}

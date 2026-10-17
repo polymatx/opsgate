@@ -21,6 +21,8 @@ without handing it a root shell.
 [Security model](#security-model) ·
 [Contributing](#contributing)
 
+<img src="docs/demo.gif" alt="An agent's calls to opsgate: a shell injection, a path traversal and a restart in observe mode are all refused, nothing runs, and each attempt is in the hash-chained audit log" width="820">
+
 </div>
 
 ---
@@ -127,6 +129,17 @@ infrastructure-management API on whatever network you expose it to.
 <details>
 <summary><b>Claude Code</b></summary>
 
+As a plugin: the MCP server, a `server-ops` skill that teaches the agent to diagnose before
+it acts and to treat refusals as final, and a read-only `/opsgate:health-check [host]` command.
+
+```
+/plugin marketplace add polymatx/opsgate
+/plugin install opsgate@opsgate
+```
+
+The plugin runs `opsgate serve`, which reads `./opsgate.yaml`, then `~/.opsgate/config.yaml`.
+Or add just the MCP server:
+
 ```bash
 claude mcp add opsgate -- opsgate serve --config ~/.opsgate/config.yaml
 ```
@@ -145,6 +158,22 @@ claude mcp add opsgate -- opsgate serve --config ~/.opsgate/config.yaml
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>Docker</b> (<code>ghcr.io/polymatx/opsgate</code>)</summary>
+
+For hosts reached over SSH. Inside a container, `local` is the container itself.
+
+```bash
+docker run -i --rm \
+  -v ~/.opsgate:/root/.opsgate \
+  -v ~/.ssh:/root/.ssh:ro \
+  ghcr.io/polymatx/opsgate serve
+```
+
+The image is also how opsgate is listed in the [MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.polymatx/opsgate`.
 </details>
 
 <details id="any-client-over-http">

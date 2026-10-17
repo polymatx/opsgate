@@ -81,6 +81,16 @@ go vet ./...
 gofmt -l .          # must print nothing
 ```
 
+## The plugin and the demo
+
+The Claude Code plugin lives in `plugin/` (MCP server, `server-ops` skill, `/opsgate:health-check`
+command) and is published through `.claude-plugin/marketplace.json`. Check both with
+`claude plugin validate --strict .` and `claude plugin validate --strict plugin`, and keep their
+`version` in step with releases.
+
+The README GIF is recorded from `docs/demo.tape`: run `vhs docs/demo.tape` from the repo root
+with `opsgate` and `jq` on your `PATH`.
+
 ## What we are looking for
 
 **Wanted:** more structured tools — Kubernetes, PostgreSQL, MySQL, Caddy, Traefik,

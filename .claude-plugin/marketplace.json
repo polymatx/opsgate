@@ -1,0 +1,37 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "opsgate",
+  "description": "opsgate for Claude Code: the safety gate between AI agents and your servers.",
+  "owner": {
+    "name": "polymatx",
+    "url": "https://github.com/polymatx"
+  },
+  "plugins": [
+    {
+      "name": "opsgate",
+      "description": "Operate servers from Claude Code without giving it a shell: the opsgate MCP server (typed, policy-checked, audited tools), a server-ops skill, and a read-only /opsgate:health-check command.",
+      "version": "0.1.2",
+      "author": {
+        "name": "polymatx",
+        "url": "https://github.com/polymatx"
+      },
+      "source": "./plugin",
+      "category": "security",
+      "homepage": "https://github.com/polymatx/opsgate",
+      "license": "MIT",
+      "keywords": [
+        "devops",
+        "sre",
+        "sysadmin",
+        "server",
+        "ssh",
+        "docker",
+        "systemd",
+        "nginx",
+        "mcp",
+        "security",
+        "audit-log"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.polymatx/opsgate",
+  "title": "opsgate",
+  "description": "The safety gate between AI agents and your servers: typed, policy-checked, audited ops tools.",
+  "repository": {
+    "url": "https://github.com/polymatx/opsgate",
+    "source": "github"
+  },
+  "websiteUrl": "https://polymatx.dev/blog/posts/opsgate-ai-agents-without-a-shell/",
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/polymatx/opsgate:0.1.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
