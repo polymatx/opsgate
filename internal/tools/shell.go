@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/polymatx/opsgate/internal/policy"
@@ -30,7 +32,11 @@ func registerShell(s *mcp.Server, g *Gate) {
 		}
 		summary := "FREEFORM SHELL COMMAND — read it carefully before approving."
 		if in.Reason != "" {
-			summary = "Reason given by the agent: " + in.Reason + "\n\n" + summary
+			reason := in.Reason
+			if len(reason) > 300 {
+				reason = strings.ToValidUTF8(reason[:300], "") + "…"
+			}
+			summary = fmt.Sprintf("Reason given by the agent: %q\n\n%s", reason, summary)
 		}
 		res, err := g.run(ctx, req, call{
 			tool:  "shell_exec",

@@ -43,13 +43,14 @@ func registerDocker(s *mcp.Server, g *Gate) {
 		host := g.resolveHost(in.Host)
 		lines := clamp(in.Lines, 100, 2000)
 		res, err := g.run(ctx, req, call{
-			tool:          "docker_logs",
-			class:         policy.Observe,
-			host:          host,
-			target:        in.Container,
-			requireTarget: true,
-			argv:          []string{"docker", "logs", "--tail", fmt.Sprint(lines), in.Container},
-			args:          map[string]any{"host": host, "container": in.Container, "lines": lines},
+			tool:           "docker_logs",
+			class:          policy.Observe,
+			host:           host,
+			target:         in.Container,
+			requireTarget:  true,
+			exactContainer: true,
+			argv:           []string{"docker", "logs", "--tail", fmt.Sprint(lines), in.Container},
+			args:           map[string]any{"host": host, "container": in.Container, "lines": lines},
 		})
 		return res, nil, err
 	})
@@ -63,11 +64,12 @@ func registerDocker(s *mcp.Server, g *Gate) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in inspectArgs) (*mcp.CallToolResult, any, error) {
 		host := g.resolveHost(in.Host)
 		res, err := g.run(ctx, req, call{
-			tool:          "docker_inspect",
-			class:         policy.Observe,
-			host:          host,
-			target:        in.Container,
-			requireTarget: true,
+			tool:           "docker_inspect",
+			class:          policy.Observe,
+			host:           host,
+			target:         in.Container,
+			requireTarget:  true,
+			exactContainer: true,
 			argv: []string{"docker", "inspect", "--format",
 				"name={{.Name}}\nstate={{.State.Status}}\nhealth={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}\n" +
 					"restarts={{.RestartCount}}\nimage={{.Config.Image}}\nstarted={{.State.StartedAt}}\nmounts={{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}",
@@ -109,14 +111,15 @@ func registerDocker(s *mcp.Server, g *Gate) {
 		}, func(ctx context.Context, req *mcp.CallToolRequest, in ctrArgs) (*mcp.CallToolResult, any, error) {
 			host := g.resolveHost(in.Host)
 			res, err := g.run(ctx, req, call{
-				tool:          action.tool,
-				class:         policy.Mutate,
-				host:          host,
-				target:        in.Container,
-				requireTarget: true,
-				argv:          []string{"docker", action.verb, in.Container},
-				args:          map[string]any{"host": host, "container": in.Container},
-				summary:       fmt.Sprintf("This will %s the container %q.", action.verb, in.Container),
+				tool:           action.tool,
+				class:          policy.Mutate,
+				host:           host,
+				target:         in.Container,
+				requireTarget:  true,
+				exactContainer: true,
+				argv:           []string{"docker", action.verb, in.Container},
+				args:           map[string]any{"host": host, "container": in.Container},
+				summary:        fmt.Sprintf("This will %s the container %q.", action.verb, in.Container),
 			})
 			return res, nil, err
 		})

@@ -16,10 +16,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 	"net"
 )
 
@@ -66,6 +68,8 @@ func (Local) Run(ctx context.Context, argv []string) (Result, error) {
 	start := time.Now()
 	// No shell: argv[0] is resolved via PATH and arguments are passed as-is.
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	killProcessGroup(cmd)
+	cmd.WaitDelay = closeGrace
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -73,6 +77,10 @@ func (Local) Run(ctx context.Context, argv []string) (Result, error) {
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		Duration: time.Since(start),
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		res.ExitCode = -1
+		return res, ctxErr
 	}
 	var ee *exec.ExitError
 	switch {
@@ -88,17 +96,58 @@ func (Local) Run(ctx context.Context, argv []string) (Result, error) {
 
 // SSH runs commands on a remote host over SSH.
 type SSH struct {
-	name   string
-	client *ssh.Client
+	name      string
+	client    *ssh.Client
+	stop      chan struct{}
+	closeOnce sync.Once
 }
+
+const (
+	keepaliveEvery   = 15 * time.Second
+	keepaliveTimeout = 10 * time.Second
+)
 
 func (s *SSH) Name() string { return s.name }
 
 func (s *SSH) Close() error {
-	if s.client != nil {
-		return s.client.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		if s.stop != nil {
+			close(s.stop)
+		}
+		if s.client != nil {
+			err = s.client.Close()
+		}
+	})
+	return err
+}
+
+func (s *SSH) keepalive() {
+	t := time.NewTicker(keepaliveEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+		}
+		replied := make(chan error, 1)
+		go func() {
+			_, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
+			replied <- err
+		}()
+		select {
+		case <-s.stop:
+			return
+		case err := <-replied:
+			if err == nil {
+				continue
+			}
+		case <-time.After(keepaliveTimeout):
+		}
+		_ = s.Close()
+		return
 	}
-	return nil
 }
 
 // DialSSH connects to addr. It authenticates with keyPath when given,
@@ -122,15 +171,22 @@ func DialSSH(name, addr, user, keyPath string, port int, timeout time.Duration) 
 		return nil, err
 	}
 	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            user,
-		Auth:            auths,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         timeout,
+		User:              user,
+		Auth:              auths,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: knownHostKeyAlgorithms(hostKeyCallback, addr),
+		Timeout:           timeout,
 	})
 	if err != nil {
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) {
+			return nil, hostKeyError(addr, keyErr)
+		}
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
-	return &SSH{name: name, client: client}, nil
+	s := &SSH{name: name, client: client, stop: make(chan struct{})}
+	go s.keepalive()
+	return s, nil
 }
 
 // closeGrace is how long Run waits, after closing a timed-out session, for
@@ -162,6 +218,10 @@ func (s *SSH) Run(ctx context.Context, argv []string) (Result, error) {
 			return
 		}
 		defer sess.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			done <- ctxErr
+			return
+		}
 		// Buffers must be attached before the session is published, so the
 		// timeout path never races with this assignment.
 		sess.Stdout, sess.Stderr = &stdout, &stderr

@@ -51,7 +51,7 @@ var targetRe = regexp.MustCompile(`^[A-Za-z0-9@:._/-]+$`)
 
 // ValidTarget reports whether a user-supplied target name is safe to pass on.
 func ValidTarget(t string) bool {
-	return t != "" && len(t) <= 256 && targetRe.MatchString(t)
+	return t != "" && len(t) <= 256 && t[0] != '-' && targetRe.MatchString(t)
 }
 
 // Engine evaluates tool calls against the loaded config.

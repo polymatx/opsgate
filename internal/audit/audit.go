@@ -5,16 +5,23 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	maxFieldBytes = 2048
+	keepBytes     = 256
 )
 
 // Phase distinguishes the two records a state-changing call produces.
@@ -51,6 +58,8 @@ type Record struct {
 type Logger struct {
 	mu         sync.Mutex
 	f          *os.File
+	path       string
+	size       int64
 	seq        int64
 	prevHash   string
 	redactKeys map[string]bool
@@ -63,69 +72,137 @@ func Open(path string, redactKeys []string) (*Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("audit dir: %w", err)
 	}
-	seq, prev, err := tail(path)
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit open: %w", err)
+	}
+	unlock, err := lockFile(f)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("audit lock: %w", err)
+	}
+	defer unlock()
+	seq, prev, size, err := tail(path)
+	if err != nil {
+		f.Close()
+		return nil, err
 	}
 	rk := make(map[string]bool, len(redactKeys))
 	for _, k := range redactKeys {
 		rk[strings.ToLower(k)] = true
 	}
-	return &Logger{f: f, seq: seq, prevHash: prev, redactKeys: rk}, nil
+	return &Logger{f: f, path: path, size: size, seq: seq, prevHash: prev, redactKeys: rk}, nil
 }
 
 // tail reads the last record to resume the chain.
-func tail(path string) (seq int64, prevHash string, err error) {
+func tail(path string) (seq int64, prevHash string, size int64, err error) {
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return 0, genesis, nil
+		return 0, genesis, 0, nil
 	}
 	if err != nil {
-		return 0, "", fmt.Errorf("audit read: %w", err)
+		return 0, "", 0, fmt.Errorf("audit read: %w", err)
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	st, err := f.Stat()
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("audit read: %w", err)
+	}
+	r, found, err := lastRecord(io.NewSectionReader(f, 0, st.Size()), path)
+	if err != nil {
+		return 0, "", 0, err
+	}
+	if !found {
+		return 0, genesis, st.Size(), nil
+	}
+	return r.Seq, r.Hash, st.Size(), nil
+}
+
+func lastRecord(src io.Reader, path string) (Record, bool, error) {
 	var last Record
 	found := false
 	lineNo := 0
-	for sc.Scan() {
+	err := eachLine(src, func(line string) error {
 		lineNo++
-		line := strings.TrimSpace(sc.Text())
 		if line == "" {
-			continue
+			return nil
 		}
 		// Refuse to resume from a damaged log. Skipping a bad line would append a
 		// chain that starts from the wrong predecessor, which is far worse than
 		// telling the operator their audit file needs attention.
 		r, err := decodeStrict(line)
 		if err != nil {
-			return 0, "", fmt.Errorf("audit log %s line %d is corrupt (%w); "+
+			return fmt.Errorf("audit log %s line %d is corrupt (%w); "+
 				"move it aside or repair it before starting opsgate", path, lineNo, err)
 		}
 		last, found = r, true
+		return nil
+	})
+	return last, found, err
+}
+
+func eachLine(src io.Reader, fn func(string) error) error {
+	br := bufio.NewReader(src)
+	for {
+		b, err := br.ReadBytes('\n')
+		if len(b) > 0 {
+			if ferr := fn(string(bytes.TrimSpace(b))); ferr != nil {
+				return ferr
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("audit read: %w", err)
+		}
 	}
-	if err := sc.Err(); err != nil {
-		return 0, "", fmt.Errorf("audit read: %w", err)
+}
+
+func (l *Logger) catchUp() error {
+	st, err := l.f.Stat()
+	if err != nil {
+		return fmt.Errorf("audit stat: %w", err)
 	}
-	if !found {
-		return 0, genesis, nil
+	switch {
+	case st.Size() == l.size:
+		return nil
+	case st.Size() < l.size:
+		seq, prev, size, err := tail(l.path)
+		if err != nil {
+			return err
+		}
+		l.seq, l.prevHash, l.size = seq, prev, size
+		return nil
 	}
-	return last.Seq, last.Hash, nil
+	r, found, err := lastRecord(io.NewSectionReader(l.f, l.size, st.Size()-l.size), l.path)
+	if err != nil {
+		return err
+	}
+	if found {
+		l.seq, l.prevHash = r.Seq, r.Hash
+	}
+	l.size = st.Size()
+	return nil
 }
 
 // Log writes one record, filling seq, hashes, and redacting sensitive args.
 func (l *Logger) Log(r Record) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	unlock, err := lockFile(l.f)
+	if err != nil {
+		return fmt.Errorf("audit lock: %w", err)
+	}
+	defer unlock()
+	if err := l.catchUp(); err != nil {
+		return err
+	}
 	l.seq++
 	r.Seq = l.seq
 	r.Time = r.Time.UTC()
 	r.Args = l.redact(r.Args)
+	r.Err = capString(r.Err)
 	r.PrevHash = l.prevHash
 	r.Hash = ""
 	h, err := hashRecord(r)
@@ -141,6 +218,7 @@ func (l *Logger) Log(r Record) error {
 		return fmt.Errorf("audit write: %w", err)
 	}
 	l.prevHash = r.Hash
+	l.size += int64(len(line) + 1)
 	return nil
 }
 
@@ -156,9 +234,43 @@ func (l *Logger) redact(args map[string]any) map[string]any {
 			out[k] = "[REDACTED]"
 			continue
 		}
-		out[k] = v
+		out[k] = capValue(v)
 	}
 	return out
+}
+
+func capValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return capString(t)
+	case map[string]any:
+		m := make(map[string]any, len(t))
+		for k, x := range t {
+			m[k] = capValue(x)
+		}
+		return m
+	case []any:
+		s := make([]any, len(t))
+		for i, x := range t {
+			s[i] = capValue(x)
+		}
+		return s
+	case []string:
+		s := make([]any, len(t))
+		for i, x := range t {
+			s[i] = capString(x)
+		}
+		return s
+	}
+	return v
+}
+
+func capString(s string) string {
+	if len(s) <= maxFieldBytes {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%s…[truncated: %d bytes, sha256 %s]", strings.ToValidUTF8(s[:keepBytes], ""), len(s), hex.EncodeToString(sum[:]))
 }
 
 // hashRecord hashes the canonical JSON of the record with Hash cleared.
@@ -202,16 +314,13 @@ func Verify(path string) (int, error) {
 		return 0, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	prev := genesis
 	n := 0
 	lineNo := 0
-	for sc.Scan() {
+	err = eachLine(f, func(line string) error {
 		lineNo++
-		line := strings.TrimSpace(sc.Text())
 		if line == "" {
-			continue
+			return nil
 		}
 		// Strict decoding matters: the chain authenticates the Record fields, so
 		// an attacker could otherwise splice extra JSON keys ("approved_by":
@@ -219,21 +328,22 @@ func Verify(path string) (int, error) {
 		// hash does not cover must be rejected outright.
 		r, err := decodeStrict(line)
 		if err != nil {
-			return n, fmt.Errorf("line %d: %w", lineNo, err)
+			return fmt.Errorf("line %d: %w", lineNo, err)
 		}
 		if r.PrevHash != prev {
-			return n, fmt.Errorf("line %d: chain broken (prev_hash %q, want %q)", lineNo, r.PrevHash, prev)
+			return fmt.Errorf("line %d: chain broken (prev_hash %q, want %q)", lineNo, r.PrevHash, prev)
 		}
 		want := r.Hash
 		got, err := hashRecord(r)
 		if err != nil {
-			return n, err
+			return err
 		}
 		if got != want {
-			return n, fmt.Errorf("line %d: record tampered (hash mismatch)", lineNo)
+			return fmt.Errorf("line %d: record tampered (hash mismatch)", lineNo)
 		}
 		prev = want
 		n++
-	}
-	return n, sc.Err()
+		return nil
+	})
+	return n, err
 }

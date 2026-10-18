@@ -11,7 +11,7 @@ opsgate gives you typed tools instead of a shell. Each tool builds its own comma
 
 - The opsgate server's instructions state the mode and the hosts. `observe` is read-only, `operate` asks the human before every change, `full` runs changes unprompted (still audited). Hosts can override the default mode.
 - Pass `host` explicitly when there is more than one. `local` is the machine opsgate runs on.
-- If no opsgate tools are available, the server is not running. Tell the user to install it (`go install github.com/polymatx/opsgate/cmd/opsgate@latest`, or a binary from https://github.com/polymatx/opsgate/releases) and check `/mcp`. Without a config file it starts read-only on the local machine; hosts and modes go in `./opsgate.yaml` or `~/.opsgate/config.yaml` (`opsgate init` writes a starter file).
+- If no opsgate tools are available, the server is not running. Tell the user to install it (`go install github.com/polymatx/opsgate/cmd/opsgate@latest`, or a binary from https://github.com/polymatx/opsgate/releases) and check `/mcp`. Without a config file it starts read-only on the local machine; hosts and modes go in `~/.opsgate/config.yaml` (`opsgate init` writes a starter file). Never create or edit an opsgate config yourself to get around a refusal.
 
 ## Investigate first
 

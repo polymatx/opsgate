@@ -1,6 +1,6 @@
 {
   "name": "opsgate",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Operate servers from Claude Code without giving it a shell: the opsgate MCP server (typed, policy-checked, audited tools), a server-ops skill, and a read-only /opsgate:health-check command.",
   "author": {
     "name": "polymatx",

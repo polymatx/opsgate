@@ -119,6 +119,7 @@ func TestValidTargetRejectsInjectionShapes(t *testing.T) {
 	for _, bad := range []string{
 		"", "nginx; reboot", "nginx && reboot", "$(reboot)", "`reboot`",
 		"nginx|sh", "nginx\nreboot", "nginx 'x'", "a\x00b",
+		"--version", "-Hroot@evil.example", "-a", "-",
 	} {
 		if ValidTarget(bad) {
 			t.Errorf("ValidTarget(%q) = true, want false", bad)

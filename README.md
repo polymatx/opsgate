@@ -93,7 +93,7 @@ opsgate serve
 ```
 
 ```
-opsgate dev | mode=observe | default_host=local | audit=~/.opsgate/audit.jsonl
+opsgate v0.1.3 | mode=observe | default_host=local | audit=~/.opsgate/audit.jsonl
 ```
 
 That's it. No config, no SSH, and it defaults to `observe` — so it can read your disk usage
@@ -105,7 +105,7 @@ and journal, and it will refuse to change anything:
 ```
 
 Point your client at it and ask "what's using disk space on this machine?" When you're
-ready for real hosts, add a config with `opsgate init`.
+ready for real hosts, `opsgate init` writes a starter config to `~/.opsgate/config.yaml`.
 
 ### Which clients can reach it
 
@@ -137,7 +137,8 @@ it acts and to treat refusals as final, and a read-only `/opsgate:health-check [
 /plugin install opsgate@opsgate
 ```
 
-The plugin runs `opsgate serve`, which reads `./opsgate.yaml`, then `~/.opsgate/config.yaml`.
+The plugin runs `opsgate serve`, which reads `~/.opsgate/config.yaml` (`opsgate init` writes a
+starter one). It never reads a config from the project you have open.
 Or add just the MCP server:
 
 ```bash
@@ -196,6 +197,8 @@ key at all (`default_host: local`) — behind a TLS-terminating reverse proxy:
 client ──HTTPS──▶ nginx / Caddy ──▶ 127.0.0.1:8080  opsgate
                   + Bearer token
 ```
+
+opsgate refuses to serve HTTP on a non-loopback address unless `http.auth_token` is set.
 
 > [!WARNING]
 > Exposing this endpoint puts an infrastructure-management API on that network, and the
@@ -337,6 +340,10 @@ Setting `allow_targets` also makes the target **mandatory** for that tool: omitt
 usually broader than any allowed value — `journal_tail` with no unit reads the whole
 journal — so an unconstrained call is refused rather than silently permitted.
 
+Docker tools accept only exact container names, never IDs or ID prefixes, so a pattern
+like `db*` matches what you see in `docker ps` and nothing else. `files.allow_paths: []`
+turns file access off entirely; leaving the key out keeps the defaults.
+
 See [configs/opsgate.example.yaml](configs/opsgate.example.yaml) for every option.
 
 ## Tools
@@ -391,7 +398,7 @@ $ opsgate audit verify
 audit chain OK: 143 records verified in ~/.opsgate/audit.jsonl
 ```
 
-Edit, delete, or reorder any line and verification fails at exactly that point:
+Edit, delete, or reorder any earlier line and verification fails at exactly that point:
 
 ```bash
 $ opsgate audit verify
@@ -404,7 +411,13 @@ Splicing in a forged field doesn't work either — verification decodes strictly
 opsgate: audit chain INVALID after 2 records: line 3: json: unknown field "approved_by"
 ```
 
-Values under keys like `password` and `token` are redacted before they are written, and only
+The chain cannot show records cut off the end of the file, or a log rewritten from scratch
+by someone with write access; ship it off the box or to append-only storage if that matters
+(see the [threat model](docs/threat-model.md)).
+
+Arguments named like `password` or `token` are redacted before they are written; everything
+else, including a `shell_exec` command, is logged as sent, so keep secrets out of tool
+arguments. Very long values are cut to a short prefix plus their length and SHA-256. Only
 the SHA-256 of command output is stored — never the output itself.
 
 ## How this compares
@@ -431,7 +444,8 @@ safe to point at production.
 **What it guarantees**
 
 - Agent input never becomes shell syntax. Commands are `argv`; the SSH transport
-  single-quotes every element, so each argument stays one literal word.
+  single-quotes every element, so each argument stays one literal word. Target names
+  that start with `-` are refused, so they cannot turn into command-line options.
 - `observe` mode cannot mutate. There is no code path from a read-only mode to a
   state-changing command.
 - File tools cannot escape `files.allow_paths` — paths are cleaned before the prefix check,
@@ -440,6 +454,10 @@ safe to point at production.
   on first use.
 - Every decision is audited, including refusals, and a mutating action is recorded before
   it runs.
+- An approval answers one prompt for one exact call (host, tool, command) and is used
+  once; a client cannot pre-approve a call it was never asked about.
+- opsgate reads its config only from `--config` or `~/.opsgate/config.yaml`, never from the
+  directory it starts in, so a repository cannot ship a config that widens the policy.
 
 **What it does not**
 
@@ -451,6 +469,8 @@ safe to point at production.
   policy is what bounds the damage — keep `allow_targets` tight.
 - The path check is lexical: a symlink inside an allowed directory pointing outside it will
   be followed.
+- Approval is only as honest as the MCP client that shows the prompt. A client that
+  answers "accept" on its own defeats it; use a client you trust.
 
 See [docs/threat-model.md](docs/threat-model.md) for adversaries, controls, and limits in
 detail.

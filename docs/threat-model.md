@@ -83,6 +83,13 @@ Two protocol shapes are supported, because MCP changed how this works:
   explicit `accept` proceeds — `decline` and `cancel` both refuse.
 - Older sessions are asked with a server-initiated elicitation and answered inline.
 
+Each input-required result carries a single-use `requestState` that opsgate binds to the
+exact host, tool and command, and it expires after 15 minutes. An `accept` is honoured only
+when it comes back with a state opsgate issued for that same call, so a client cannot
+approve a call it was never asked about, or reuse one approval for another call. Approval
+still depends on the client presenting the prompt to a human: a client that answers
+`accept` by itself defeats this control, so the client is part of the trusted base.
+
 If the client cannot ask the operator at all, the call fails closed with an explanatory
 error — it never silently proceeds. `internal/tools/approval_test.go` drives a real MCP
 client over an in-memory transport to prove accept executes, decline and cancel do not,
@@ -98,7 +105,7 @@ rejected:
 - `/var/logsomething/x` → refused (the prefix must end at a path boundary)
 
 Defaults are `/var/log`, `/etc/nginx`, `/etc/systemd` — deliberately not `/`, and
-deliberately not `$HOME`.
+deliberately not `$HOME`. An explicit `allow_paths: []` disables file access entirely.
 
 A glob entry such as `/srv/*/logs` acts as a directory prefix: files beneath a matching
 directory are readable, and `/srv/app1/secrets` is not.

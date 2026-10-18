@@ -159,9 +159,10 @@ func registerNginx(s *mcp.Server, g *Gate) {
 }
 
 // allowedPath cleans p and checks it against files.allow_paths. It returns the
-// cleaned absolute path. Symlink escapes are handled on the host side by using
-// the cleaned path only; traversal like /var/log/../../etc/shadow is rejected
-// because cleaning resolves it before the prefix check.
+// cleaned absolute path. Traversal like /var/log/../../etc/shadow is rejected
+// because cleaning resolves it before the prefix check. Symlinks are not
+// resolved: a link inside an allowed directory that points elsewhere is
+// followed by the remote command, as the README's security model states.
 func (g *Gate) allowedPath(p string) (string, bool) {
 	if p == "" || !strings.HasPrefix(p, "/") {
 		return "", false
@@ -193,6 +194,9 @@ func (g *Gate) allowedPath(p string) (string, bool) {
 }
 
 func (g *Gate) pathRefusal(p string) string {
+	if len(g.cfg.Files.AllowPaths) == 0 {
+		return fmt.Sprintf("Refused: %q cannot be read: file access is disabled (files.allow_paths is empty).", p)
+	}
 	return fmt.Sprintf(
 		"Refused: %q is outside the allowed paths. opsgate only exposes: %s (configure files.allow_paths to change this).",
 		p, strings.Join(g.cfg.Files.AllowPaths, ", "))

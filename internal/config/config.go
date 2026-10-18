@@ -112,15 +112,14 @@ func Default() *Config {
 	return c
 }
 
-// Load reads the config from path. When path is empty it tries
-// ./opsgate.yaml then ~/.opsgate/config.yaml, falling back to Default.
+// Load reads the config from path. When path is empty it uses
+// ~/.opsgate/config.yaml if it exists, falling back to Default. It never reads
+// a config from the working directory: a cloned repository could otherwise
+// ship one that widens the policy.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		for _, cand := range []string{"opsgate.yaml", expandHome("~/.opsgate/config.yaml")} {
-			if _, err := os.Stat(cand); err == nil {
-				path = cand
-				break
-			}
+		if cand := DefaultPath(); fileExists(cand) {
+			path = cand
 		}
 	}
 	if path == "" {
@@ -167,7 +166,7 @@ func (c *Config) applyDefaults() {
 	if c.Files.MaxBytes <= 0 {
 		c.Files.MaxBytes = 64 * 1024
 	}
-	if len(c.Files.AllowPaths) == 0 {
+	if c.Files.AllowPaths == nil {
 		c.Files.AllowPaths = []string{"/var/log", "/etc/nginx", "/etc/systemd"}
 	}
 	if c.Tools == nil {
@@ -235,4 +234,13 @@ func expandHome(p string) string {
 		}
 	}
 	return p
+}
+
+func DefaultPath() string {
+	return expandHome("~/.opsgate/config.yaml")
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

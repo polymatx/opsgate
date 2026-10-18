@@ -2,7 +2,7 @@
 
 Lets Claude Code inspect and operate your servers through [opsgate](https://github.com/polymatx/opsgate) instead of a shell.
 
-- **MCP server**: runs `opsgate serve`, which reads `./opsgate.yaml`, then `~/.opsgate/config.yaml`. With neither, it is read-only on the local machine.
+- **MCP server**: runs `opsgate serve`, which reads `~/.opsgate/config.yaml`. Without it, it is read-only on the local machine. It never reads a config from the project you have open.
 - **Skill** `server-ops`: investigate with read-only tools first, change state only after a diagnosis, and treat refusals as final.
 - **Command** `/opsgate:health-check [host]`: a read-only health report.
 
@@ -16,4 +16,4 @@ Lets Claude Code inspect and operate your servers through [opsgate](https://gith
    /plugin install opsgate@opsgate
    ```
 
-3. Optional: `opsgate init --config ~/.opsgate/config.yaml` writes a starter config for your hosts and modes.
+3. Optional: `opsgate init` writes a starter config to `~/.opsgate/config.yaml` for your hosts and modes.

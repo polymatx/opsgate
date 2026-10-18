@@ -7,9 +7,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -31,7 +33,7 @@ Usage:
   opsgate version                               Print version information
 
 Flags:
-  --config FILE   Config path (default: ./opsgate.yaml, then ~/.opsgate/config.yaml)
+  --config FILE   Config path (default: ~/.opsgate/config.yaml; the working directory is never searched)
   --http ADDR     Serve streamable HTTP on ADDR instead of stdio (e.g. :8080)
 `
 
@@ -124,8 +126,12 @@ func serveHTTP(ctx context.Context, cfg *config.Config, newServer func() *mcp.Se
 	if cfg.HTTP.AuthToken != "" {
 		root = bearerAuth(cfg.HTTP.AuthToken, handler)
 	} else {
+		if !loopbackOnly(cfg.HTTP.Addr) {
+			return fmt.Errorf("refusing to serve %s without http.auth_token: it is not a loopback address, "+
+				"so anyone who can reach it could drive your servers. Set http.auth_token or bind to 127.0.0.1", cfg.HTTP.Addr)
+		}
 		fmt.Fprintln(os.Stderr,
-			"opsgate: WARNING — http.auth_token is not set; anyone who can reach this port can drive your servers")
+			"opsgate: WARNING — http.auth_token is not set; any local process can drive your servers")
 	}
 
 	srv := &http.Server{
@@ -237,12 +243,15 @@ func cmdAudit(args []string) error {
 
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	cfgPath := fs.String("config", "opsgate.yaml", "where to write the config")
+	cfgPath := fs.String("config", config.DefaultPath(), "where to write the config")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if _, err := os.Stat(*cfgPath); err == nil {
 		return fmt.Errorf("%s already exists; refusing to overwrite it", *cfgPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(*cfgPath), 0o700); err != nil {
+		return err
 	}
 	if err := os.WriteFile(*cfgPath, []byte(starterConfig), 0o600); err != nil {
 		return err
@@ -290,3 +299,15 @@ max_output_bytes: 49152
 #   addr: "127.0.0.1:8080"
 #   auth_token: "generate-a-long-random-token"
 `
+
+func loopbackOnly(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}

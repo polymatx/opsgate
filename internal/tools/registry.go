@@ -4,6 +4,9 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -30,16 +33,27 @@ type Gate struct {
 	// only calls to that host rather than every concurrent call.
 	dialMu map[string]*sync.Mutex
 	dialer func(name string, h config.Host, timeout time.Duration) (executor.Executor, error)
+
+	approvalsMu sync.Mutex
+	approvals   map[string]pendingApproval
 }
+
+type pendingApproval struct {
+	fingerprint string
+	expires     time.Time
+}
+
+const approvalTTL = 15 * time.Minute
 
 // NewGate builds a Gate. Executors are created lazily on first use per host.
 func NewGate(cfg *config.Config, log *audit.Logger) *Gate {
 	return &Gate{
-		cfg:    cfg,
-		pol:    policy.New(cfg),
-		log:    log,
-		execs:  map[string]executor.Executor{},
-		dialMu: map[string]*sync.Mutex{},
+		cfg:       cfg,
+		pol:       policy.New(cfg),
+		log:       log,
+		execs:     map[string]executor.Executor{},
+		dialMu:    map[string]*sync.Mutex{},
+		approvals: map[string]pendingApproval{},
 		dialer: func(name string, h config.Host, timeout time.Duration) (executor.Executor, error) {
 			return executor.DialSSH(name, h.Addr, h.User, h.Key, h.Port, timeout)
 		},
@@ -114,16 +128,18 @@ func (g *Gate) executorFor(host string) (executor.Executor, error) {
 // evict drops a host's cached executor so the next call redials. Without this a
 // single dropped SSH connection would wedge every later call to that host for
 // the lifetime of the process, since NewSession on a dead client fails forever.
-func (g *Gate) evict(host string) {
+func (g *Gate) evict(host string, failed executor.Executor) {
 	if host == "local" {
 		return
 	}
 	g.mu.Lock()
 	e, ok := g.execs[host]
-	delete(g.execs, host)
+	if ok && e == failed {
+		delete(g.execs, host)
+	}
 	g.mu.Unlock()
-	if ok {
-		_ = e.Close()
+	if failed != nil {
+		_ = failed.Close()
 	}
 }
 
@@ -164,7 +180,8 @@ type call struct {
 	requireTarget bool
 	// targetIsPath marks target as a filesystem path already validated by
 	// allowedPath, exempting it from the unit-name charset.
-	targetIsPath bool
+	targetIsPath   bool
+	exactContainer bool
 }
 
 // run executes a gated call and returns text output for the model.
@@ -203,6 +220,15 @@ func (g *Gate) run(ctx context.Context, req *mcp.CallToolRequest, c call) (*mcp.
 		rec.Err = reason
 		g.logRec(rec)
 		return errResult(fmt.Sprintf("Refused by opsgate policy: %s", reason)), nil
+	}
+
+	if c.exactContainer {
+		if msg := g.checkContainerName(ctx, c); msg != "" {
+			rec.Decision = "deny"
+			rec.Err = msg
+			g.logRec(rec)
+			return errResult("Refused: " + msg), nil
+		}
 	}
 
 	if decision == policy.NeedsApproval {
@@ -267,10 +293,13 @@ func (g *Gate) run(ctx context.Context, req *mcp.CallToolRequest, c call) (*mcp.
 		if errors.Is(runErr, context.DeadlineExceeded) {
 			return errResult(fmt.Sprintf("Command timed out after %ds on %s.", g.cfg.TimeoutSeconds, c.host)), nil
 		}
+		if errors.Is(runErr, context.Canceled) {
+			return errResult(fmt.Sprintf("Command cancelled on %s.", c.host)), nil
+		}
 		// A transport-level failure (as opposed to a non-zero exit) may mean the
 		// connection is dead. Drop it so the next call reconnects instead of
 		// failing identically forever.
-		g.evict(c.host)
+		g.evict(c.host, e)
 		return errResult(fmt.Sprintf("Command failed on %s: %v", c.host, runErr)), nil
 	}
 	g.logRec(rec)
@@ -317,7 +346,7 @@ func (g *Gate) askApproval(ctx context.Context, req *mcp.CallToolRequest, c call
 
 	// Is this the retry that carries the operator's answer?
 	if req.Params != nil {
-		if resp, ok := req.Params.InputResponses[approvalKey]; ok {
+		if resp, ok := req.Params.InputResponses[approvalKey]; ok && g.consumeApproval(req.Params.RequestState, c) {
 			res, ok := resp.(*mcp.ElicitResult)
 			if !ok {
 				return false, nil, fmt.Errorf("unexpected approval response of type %T", resp)
@@ -330,10 +359,15 @@ func (g *Gate) askApproval(ctx context.Context, req *mcp.CallToolRequest, c call
 	prompt := &mcp.ElicitParams{Message: g.approvalPrompt(c)}
 
 	if ip := req.Session.InitializeParams(); ip != nil && ip.ProtocolVersion >= mrtrProtocolVersion {
+		state, err := g.issueApproval(c)
+		if err != nil {
+			return false, nil, err
+		}
 		// An input-required result must carry only the input requests: the SDK
 		// rejects a result that also has content.
 		return false, &mcp.CallToolResult{
 			InputRequests: mcp.InputRequestMap{approvalKey: prompt},
+			RequestState:  state,
 		}, nil
 	}
 
@@ -344,6 +378,57 @@ func (g *Gate) askApproval(ctx context.Context, req *mcp.CallToolRequest, c call
 		return false, nil, err
 	}
 	return res.Action == "accept", nil, nil
+}
+
+func approvalFingerprint(c call) string {
+	sum := sha256.Sum256([]byte(c.host + "\x00" + c.tool + "\x00" + executor.QuoteArgv(c.argv)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (g *Gate) issueApproval(c call) (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("approval nonce: %w", err)
+	}
+	nonce := hex.EncodeToString(b)
+	now := time.Now()
+	g.approvalsMu.Lock()
+	defer g.approvalsMu.Unlock()
+	for k, p := range g.approvals {
+		if now.After(p.expires) {
+			delete(g.approvals, k)
+		}
+	}
+	g.approvals[nonce] = pendingApproval{fingerprint: approvalFingerprint(c), expires: now.Add(approvalTTL)}
+	return nonce, nil
+}
+
+func (g *Gate) consumeApproval(state string, c call) bool {
+	if state == "" {
+		return false
+	}
+	g.approvalsMu.Lock()
+	p, ok := g.approvals[state]
+	delete(g.approvals, state)
+	g.approvalsMu.Unlock()
+	return ok && time.Now().Before(p.expires) && p.fingerprint == approvalFingerprint(c)
+}
+
+func (g *Gate) checkContainerName(ctx context.Context, c call) string {
+	e, err := g.executorFor(c.host)
+	if err != nil {
+		return ""
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(g.cfg.TimeoutSeconds)*time.Second)
+	defer cancel()
+	res, err := e.Run(runCtx, []string{"docker", "container", "inspect", "--format", "{{.Name}}", c.target})
+	if err != nil || res.ExitCode != 0 {
+		return fmt.Sprintf("no container is named exactly %q on %s.", c.target, c.host)
+	}
+	if name := strings.TrimPrefix(strings.TrimSpace(res.Stdout), "/"); name != c.target {
+		return fmt.Sprintf("%q is not an exact container name (Docker resolved it to %q). Use the full container name.", c.target, name)
+	}
+	return ""
 }
 
 // approvalPrompt is what the operator reads before deciding.

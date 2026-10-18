@@ -9,7 +9,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
 
 Hide
-Type `source docs/demo/tool.sh && cd "$(mktemp -d)" && printf 'mode: observe\nfiles:\n  allow_paths: [/var/log]\naudit:\n  path: audit.jsonl\n' > opsgate.yaml && clear` Enter
+Type `source docs/demo/tool.sh && export HOME="$(mktemp -d)" && cd "$HOME" && mkdir .opsgate && printf 'mode: observe\nfiles:\n  allow_paths: [/var/log]\naudit:\n  path: audit.jsonl\n' > .opsgate/config.yaml && clear` Enter
 Sleep 500ms
 Show
 

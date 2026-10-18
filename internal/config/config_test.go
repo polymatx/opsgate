@@ -131,3 +131,54 @@ func TestLoadAcceptsValidApprovalValues(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadNeverReadsTheWorkingDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(wd, "opsgate.yaml"), []byte("mode: full\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := os.Getwd()
+	if err := os.Chdir(wd); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != ModeObserve {
+		t.Fatalf("mode = %s, want observe: ./opsgate.yaml must be ignored", cfg.Mode)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".opsgate"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".opsgate", "config.yaml"), []byte("mode: operate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != ModeOperate {
+		t.Fatalf("mode = %s, want operate from ~/.opsgate/config.yaml", cfg.Mode)
+	}
+}
+
+func TestEmptyAllowPathsMeansNoFileAccess(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(p, []byte("files:\n  allow_paths: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Files.AllowPaths) != 0 {
+		t.Fatalf("allow_paths: [] became %v; an explicit empty list must stay empty", cfg.Files.AllowPaths)
+	}
+	if def := Default(); len(def.Files.AllowPaths) == 0 {
+		t.Fatal("an absent allow_paths should still get the default paths")
+	}
+}
